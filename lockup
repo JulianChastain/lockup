@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+from nacl import secret, pwhash, utils, hash, encoding, bindings, hashlib
+import click
+import base64
+
+def kdf(passwd, salt, size = secret.SecretBox.KEY_SIZE):
+    ops = pwhash.argon2i.OPSLIMIT_SENSITIVE
+    mem = pwhash.argon2i.MEMLIMIT_SENSITIVE
+    bpass = bytes(passwd, 'utf-8')
+    return pwhash.argon2i.kdf(size, bpass, salt, opslimit=ops, memlimit=mem)
+
+def keygen(passwd):
+    seed = hashlib.scrypt(passwd, salt=b"", n=2**14, dklen=32)
+    salt = utils.randombytes_deterministic(pwhash.argon2i.SALTBYTES, seed)
+    key = kdf(passwd, salt)
+    print(f"Your key is:\n{encoding.Base64Encoder.encode(key)}")
+    return key
+
+def encrypt(msg, key):
+    safe = secret.SecretBox(key)
+    return safe.encrypt(bytes(msg, 'utf-8'))
+
+def decrypt(msg, key):
+    safe = secret.SecretBox(key)
+    return safe.decrypt(msg).decode('utf-8')
+
+def paranoid_encrypt(msg, passwd):
+    salt = utils.random(pwhash.argon2i.SALTBYTES)
+    key = kdf(passwd, salt)
+    safe = secret.SecretBox(key)
+    #print("salt: ", encoding.Base64Encoder.encode(salt), "\n")
+    #print("key: ",encoding.Base64Encoder.encode(key), "\n")
+    ct = salt + safe.encrypt(bytes(msg, 'utf-8'))
+    return encoding.Base64Encoder.encode(ct)
+
+def get_salt_and_ct(b64):
+    data = base64.b64decode(b64)
+    SB = pwhash.argon2i.SALTBYTES
+    return (data[:SB], data[SB:])
+
+def paranoid_decrypt(ct, passwd):
+    salt, ciphertext = get_salt_and_ct(ct)
+    #print("salt: ", encoding.Base64Encoder.encode(salt), "\n")
+    key = kdf(passwd, salt)
+    #print("key: ", encoding.Base64Encoder.encode(key), '\n')
+    safe = secret.SecretBox(key)
+    return safe.decrypt(ciphertext).decode('utf-8')
+
+def test_lock():
+    password = input('enter your password\n')
+    key = keygen(password)
+    msg = input('\nenter your message\n')
+    ciphertext = encrypt(msg, key)
+    ciphertext_encode = encoding.Base64Encoder.encode(ciphertext)
+    print(f"Your ciphertext is:\n{ciphertext_encode}")
+    plaintext = decrypt(ciphertext, key)
+    print(f"\nYour plaintext is:\n{plaintext}\n")
+
+def getpasswd():
+    return input("Please enter your password\n")
+
+def encrypt_prompt():
+    print("Encryption mode")
+    passwd = input("Please enter your password\n")
+    mode = input("Do you want to encrypt a [f]ile or a [t]ext blob?\n")
+    msg = ''
+    filename = None
+    if mode[0] == 'f' or mode[0] == 'F':
+        filename = input('Please enter the name of the file you want to encrypt\n')
+        f = open(filename, 'r')
+        msg = f.read()
+        f.close()
+    else:
+        msg = input("Please enter the text you would like to encrypt\n")
+    mode = input("Would you like the result to be printed to the [t]erminal or saved in a [f]ile\n")
+    if mode[0] == 'f' or mode[0] == 'F':
+        filename = input('What would you like the name of the output file to be?\n')
+        f = open(filename, 'w')
+        ct = paranoid_encrypt(msg, passwd)
+        breakpoint()
+        f.write(paranoid_encrypt(msg, passwd).decode('utf-8'))
+        f.close()
+    else:
+        print("Your encrypted message is \n", paranoid_encrypt(msg, passwd))
+
+def complex_cli():
+    mode = input("Would you like to [e]ncrypt or [d]ecrypt?\n")
+    if mode[0] == 'e' or mode[0] == 'E':
+        encrypt_prompt()
+    else:
+        decrypt_prompt()
+
+@click.option("--encrypt", "-e", default=None, type=click.File('r'))
+@click.option("--decrypt", "-d", default=None, type=click.File('r'))
+@click.command()
+def simple_cli(encrypt, decrypt):
+    if encrypt:
+        passwd = getpasswd()
+        print(f"Encrypting {encrypt.name} to {encrypt.name + '.secure'}")
+        write_file = open(encrypt.name + ".secure", 'w')
+        #print(f"{encrypt.name + '.secure'} was created successfully")
+        write_file.write(paranoid_encrypt(encrypt.read(), passwd).decode('utf-8'))
+        print("Encryption finished!")
+        write_file.close()
+    if decrypt:
+        passwd = getpasswd()
+        ctt = bytes(decrypt.read(), 'utf-8')
+        write_file = open(decrypt.name + ".open", 'w')
+        write_file.write(paranoid_decrypt(ctt, passwd))
+        print(f"Decryption finished!, result saved in {decrypt.name + '.open'}")
+        write_file.close()
+    
+    
+if __name__ == '__main__':
+    simple_cli()
